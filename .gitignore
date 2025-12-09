@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Streamlit
+.streamlit/
+
+# 打包文件
+*.spec
+*.exe
+dist/
+build/
+*.pkg
+*.toc
+*.html
+warn-*.txt
+
+# 临时文件
+*.tmp
+*.log
+*.bak
+
+# 测试和调试
+debug/
+output/
+*.debug
+
+# 文档构建
+docs/_build/
+
