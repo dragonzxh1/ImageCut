@@ -31,7 +31,7 @@ desktop.ini
 .streamlit/
 
 # 打包文件
-*.spec
+# *.spec  # 保留spec文件，因为它们是配置文件
 *.exe
 dist/
 build/
