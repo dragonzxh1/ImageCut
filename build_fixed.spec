@@ -12,15 +12,17 @@ block_cipher = None
 # 收集streamlit的所有数据文件和子模块
 streamlit_datas, streamlit_binaries, streamlit_hiddenimports = collect_all('streamlit')
 cv2_datas, cv2_binaries, cv2_hiddenimports = collect_all('cv2')
+rembg_datas, rembg_binaries, rembg_hiddenimports = collect_all('rembg')
+onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = collect_all('onnxruntime')
 
 a = Analysis(
     ['launcher.py'],  # 使用修复后的启动器作为入口
     pathex=[],
-    binaries=streamlit_binaries + cv2_binaries,
+    binaries=streamlit_binaries + cv2_binaries + rembg_binaries + onnxruntime_binaries,
     datas=[
         ('cut_image.py', '.'),
         ('app.py', '.'),  # 包含app.py
-    ] + streamlit_datas + cv2_datas,
+    ] + streamlit_datas + cv2_datas + rembg_datas + onnxruntime_datas,
     hiddenimports=[
         'streamlit',
         'cv2',
@@ -37,7 +39,15 @@ a = Analysis(
         'altair',
         'pandas',
         'pyarrow',
-    ] + streamlit_hiddenimports + cv2_hiddenimports,
+        # rembg 相关
+        'rembg',
+        'rembg.bg',
+        'rembg.session_factory',
+        # onnxruntime 相关
+        'onnxruntime',
+        'onnxruntime.capi',
+        'onnxruntime.capi.onnxruntime_pybind11_state',
+    ] + streamlit_hiddenimports + cv2_hiddenimports + rembg_hiddenimports + onnxruntime_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

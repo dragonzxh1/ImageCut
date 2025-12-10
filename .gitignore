@@ -49,6 +49,14 @@ warn-*.txt
 debug/
 output/
 *.debug
+test_*.py
+test_*_output/
+test_*/
+debug_*.py
+debug_*.jpg
+test*.png
+test*.jpg
+1.jpg
 
 # 文档构建
 docs/_build/
