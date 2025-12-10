@@ -33,6 +33,121 @@ except Exception as e:
     print(f"⚠ GPU检测失败: {e}，将使用CPU模式")
 
 # ============================================================================
+# 图像预处理函数 - 用于提高OCR准确性，处理噪点问题
+# ============================================================================
+
+def denoise_image_for_ocr(image: np.ndarray, method='adaptive') -> np.ndarray:
+    """
+    对图像进行去噪处理，提高OCR准确性
+    
+    Args:
+        image: 输入图像（BGR格式）
+        method: 去噪方法
+            - 'adaptive': 自适应去噪（推荐）
+            - 'gaussian': 高斯模糊
+            - 'median': 中值滤波
+            - 'morphology': 形态学操作
+            - 'combined': 组合方法
+    
+    Returns:
+        去噪后的图像（BGR格式）
+    """
+    if method == 'adaptive':
+        # 自适应去噪：根据图像特征选择最佳方法
+        # 转换为灰度图进行分析
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # 计算图像对比度
+        contrast = np.std(gray)
+        
+        # 如果对比度较低，使用更强的去噪
+        if contrast < 30:
+            # 低对比度：使用形态学操作 + 高斯模糊
+            denoised = apply_morphology_denoise(image)
+            denoised = cv2.GaussianBlur(denoised, (3, 3), 0)
+        elif contrast < 60:
+            # 中等对比度：使用中值滤波
+            denoised = cv2.medianBlur(image, 3)
+        else:
+            # 高对比度：轻微高斯模糊
+            denoised = cv2.GaussianBlur(image, (3, 3), 0.5)
+        
+        return denoised
+    
+    elif method == 'gaussian':
+        return cv2.GaussianBlur(image, (3, 3), 0)
+    
+    elif method == 'median':
+        return cv2.medianBlur(image, 3)
+    
+    elif method == 'morphology':
+        return apply_morphology_denoise(image)
+    
+    elif method == 'combined':
+        # 组合方法：先中值滤波，再形态学操作
+        denoised = cv2.medianBlur(image, 3)
+        denoised = apply_morphology_denoise(denoised)
+        return denoised
+    
+    else:
+        return image
+
+
+def apply_morphology_denoise(image: np.ndarray) -> np.ndarray:
+    """
+    使用形态学操作去噪
+    适用于去除小的噪点，同时保持文字清晰
+    
+    Args:
+        image: 输入图像（BGR格式）
+    
+    Returns:
+        去噪后的图像
+    """
+    # 转换为灰度图
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # 创建小的结构元素（用于去除小噪点）
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    
+    # 开运算：先腐蚀后膨胀，去除小噪点
+    opened = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel, iterations=1)
+    
+    # 闭运算：先膨胀后腐蚀，连接断开的文字
+    closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=1)
+    
+    # 转换回BGR
+    result = cv2.cvtColor(closed, cv2.COLOR_GRAY2BGR)
+    
+    return result
+
+
+def enhance_contrast_for_ocr(image: np.ndarray) -> np.ndarray:
+    """
+    增强图像对比度，提高OCR准确性
+    
+    Args:
+        image: 输入图像（BGR格式）
+    
+    Returns:
+        增强后的图像
+    """
+    # 转换为LAB色彩空间
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    
+    # 对L通道应用CLAHE（对比度受限的自适应直方图均衡化）
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    
+    # 合并通道并转换回BGR
+    enhanced = cv2.merge([l, a, b])
+    enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+    
+    return enhanced
+
+
+# ============================================================================
 # 关键调整参数 - 如果运行结果不完美，请调整以下参数
 # ============================================================================
 
@@ -1901,6 +2016,7 @@ def detect_label_region(image: np.ndarray, card_contour: np.ndarray, reader, ocr
 def extract_card_number(text: str) -> Optional[str]:
     """
     从文本中提取至少7位的连续数字作为卡号
+    支持处理被标点符号（如逗号、句号、空格）分隔的数字
     
     Args:
         text: 输入的文本内容
@@ -1918,18 +2034,106 @@ def extract_card_number(text: str) -> Optional[str]:
     text_preview = text[:200] if len(text) > 200 else text
     print(f"    调试: 提取卡号的文本: {text_preview}")
     
-    # 查找所有连续的数字（至少7位）
-    # 使用正则表达式匹配至少7位的连续数字
+    # 方法1：查找所有连续的数字（至少7位）
     pattern = r'\d{7,}'
     matches = re.findall(pattern, text)
     
-    print(f"    调试: 找到的数字匹配: {matches}")
+    # 方法2：处理被标点符号分隔的数字（如 "551,041,454,3" 或 "551.041.454.3"）
+    # 注意：只移除数字之间的分隔符，避免将不同数字错误合并
+    # 使用更智能的方法：查找被分隔符分隔的数字段，然后合并
+    # 例如："551,041,454,3" -> 合并为 "5510414543"
+    # 但 "8.5 5510414543" 不应该合并为 "85510414543"
     
-    if matches:
-        # 返回最长的数字串（通常卡号是最长的）
-        card_number = max(matches, key=len)
-        print(f"    调试: 选择的卡号: {card_number} (从 {len(matches)} 个匹配中选择)")
+    # 先尝试方法2a：查找被分隔符分隔的连续数字段
+    # 匹配模式：数字 + 分隔符 + 数字 + 分隔符 + ... + 数字
+    # 要求：至少3段，每段至少3位数字（避免将 "8.5" 这样的短数字段包含进去）
+    # 这样可以匹配 "551,041,454,3" 但不会匹配 "8.5 5510414543"
+    pattern_separated = r'(?:\d{3,}[,.\s\-_]){2,}\d{2,}'
+    separated_matches = re.findall(pattern_separated, text)
+    
+    # 清理这些匹配：移除分隔符
+    cleaned_separated = []
+    for match in separated_matches:
+        cleaned = re.sub(r'[,.\s\-_]', '', match)
+        if len(cleaned) >= 7:
+            cleaned_separated.append(cleaned)
+    
+    # 方法2b：简单去除分隔符（但只用于没有明显分隔的数字段）
+    # 只在没有找到方法2a的匹配时使用
+    # 注意：这个方法可能会错误合并相邻的不同数字（如 "8.5 5510414543"）
+    # 所以只在方法2a失败时使用
+    if not cleaned_separated:
+        # 更保守的方法：只移除数字之间的分隔符，不移除数字和其他字符之间的分隔符
+        # 查找被分隔符分隔的数字段，但要求至少3段，每段至少2位
+        # 这样可以匹配 "551,041,454,3" 但不会匹配 "8.5 5510414543"
+        pattern_conservative = r'(?:\d{2,}[,.\-]){2,}\d{2,}'  # 只匹配逗号、句号、连字符，不包括空格
+        conservative_matches = re.findall(pattern_conservative, text)
+        if conservative_matches:
+            for match in conservative_matches:
+                cleaned = re.sub(r'[,.\-]', '', match)
+                if len(cleaned) >= 7:
+                    cleaned_separated.append(cleaned)
+        
+        # 如果仍然没有找到，才使用简单方法（但会有误合并的风险）
+        if not cleaned_separated:
+            text_cleaned = re.sub(r'[,.\s\-_]', '', text)
+            pattern_cleaned = r'\d{7,}'
+            matches_cleaned = re.findall(pattern_cleaned, text_cleaned)
+            cleaned_separated = matches_cleaned
+    else:
+        matches_cleaned = []  # 如果方法2a找到了，方法2b不需要
+    
+    # 合并所有方法的结果
+    all_matches = list(set(matches + cleaned_separated))
+    
+    print(f"    调试: 找到的数字匹配（方法1）: {matches}")
+    print(f"    调试: 找到的数字匹配（方法2，去除分隔符后）: {cleaned_separated}")
+    print(f"    调试: 合并后的匹配: {all_matches}")
+    
+    if all_matches:
+        # 智能选择策略：
+        # 1. 优先选择方法1（直接匹配）的结果，因为它们更可靠
+        # 2. 如果方法1有结果，优先从方法1中选择
+        # 3. 如果方法1没有结果，才使用方法2的结果
+        method1_valid = [m for m in matches if 7 <= len(m) <= 12]
+        method2_valid = [m for m in cleaned_separated if 7 <= len(m) <= 12]
+        
+        if method1_valid:
+            # 方法1有有效结果，优先使用
+            card_number = max(method1_valid, key=len)
+            print(f"    调试: 选择的卡号: {card_number} (从方法1中选择，长度 {len(card_number)} 位)")
+        elif method2_valid:
+            # 方法1没有，使用方法2
+            card_number = max(method2_valid, key=len)
+            print(f"    调试: 选择的卡号: {card_number} (从方法2中选择，长度 {len(card_number)} 位)")
+        else:
+            # 都不在常见范围，选择最长的
+            valid_lengths = [m for m in all_matches if 7 <= len(m) <= 12]
+            if valid_lengths:
+                card_number = max(valid_lengths, key=len)
+                print(f"    调试: 选择的卡号: {card_number} (从 {len(all_matches)} 个匹配中选择，长度 {len(card_number)} 位)")
+            else:
+                card_number = max(all_matches, key=len)
+                print(f"    调试: 选择的卡号: {card_number} (从 {len(all_matches)} 个匹配中选择，长度 {len(card_number)} 位，超出常见范围)")
         return card_number
+    
+    # 方法3：如果仍然没找到，尝试更宽松的匹配
+    # 查找被分隔的数字段，然后合并（至少7位）
+    # 例如："551,041,454,3" -> "5510414543" 或 "551 041 454 3" -> "5510414543"
+    # 先移除所有非数字字符，然后查找连续数字
+    text_digits_only = re.sub(r'[^\d]', '', text)
+    if len(text_digits_only) >= 7:
+        # 查找所有至少7位的连续数字段
+        long_digits = re.findall(r'\d{7,}', text_digits_only)
+        if long_digits:
+            card_number = max(long_digits, key=len)
+            print(f"    调试: 使用方法3（移除所有非数字字符后），找到卡号: {card_number}")
+            return card_number
+        
+        # 如果整个文本去除非数字后就是一个长数字，直接使用
+        if len(text_digits_only) >= 7:
+            print(f"    调试: 使用方法3（整个文本去除非数字后），找到卡号: {text_digits_only}")
+            return text_digits_only
     
     print(f"    调试: 未找到符合条件的卡号（至少7位的数字）")
     return None
@@ -1965,6 +2169,18 @@ def extract_label_text_with_easyocr(image: np.ndarray, card_contour: Optional[np
         bgr_image = (bgr_image * (1 - alpha) + image[:, :, :3] * alpha).astype(np.uint8)
     else:
         bgr_image = image
+    
+    # 图像预处理：去噪和增强对比度，提高OCR准确性
+    # 这对于有噪点的label特别重要
+    print(f"    对label区域进行图像预处理（去噪和对比度增强）...")
+    try:
+        # 使用自适应去噪
+        bgr_image = denoise_image_for_ocr(bgr_image, method='adaptive')
+        # 增强对比度
+        bgr_image = enhance_contrast_for_ocr(bgr_image)
+        print(f"    ✓ 图像预处理完成")
+    except Exception as e:
+        print(f"    ⚠ 图像预处理失败: {e}，继续使用原始图像")
     
     # 重要：split_cards_from_transparent 返回的 card_contour 是整个卡片+label的外轮廓
     # 我们需要重新检测卡片本身的轮廓（高饱和度区域），而不是使用传入的轮廓
@@ -2131,6 +2347,9 @@ def split_cards_from_transparent(image_bgra: np.ndarray, min_area_ratio: float =
     """
     从透明背景图片中分割出每张卡片
     
+    策略：卡片通常排列在四个角上（2x2布局），先按水平和垂直中线分割成4个象限，
+    然后在每个象限中检测卡片，避免卡片之间的连接问题。
+    
     Args:
         image_bgra: 输入图像（BGRA格式，带透明背景）
         min_area_ratio: 最小区域面积比例（相对于整个图像）
@@ -2141,45 +2360,147 @@ def split_cards_from_transparent(image_bgra: np.ndarray, min_area_ratio: float =
     if image_bgra.shape[2] != 4:
         raise ValueError("输入图像必须是 BGRA 格式（4通道）")
     
+    h, w = image_bgra.shape[:2]
+    total_area = h * w
+    min_area = total_area * min_area_ratio
+    
     # 提取 alpha 通道
     alpha = image_bgra[:, :, 3]
     
     # 创建二值掩码：有像素的区域（alpha > 0）
     mask = (alpha > 0).astype(np.uint8) * 255
     
-    # 形态学操作：填补小孔，连接断开的区域
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+    # 形态学操作：填补小孔，但不要过度连接卡片
+    # 使用较小的kernel和较少的迭代次数，避免将多张卡片连接在一起
+    kernel_small = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    # 先开运算去除小噪点
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_small, iterations=1)
+    # 再闭运算填补小孔，但迭代次数减少
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_small, iterations=1)
     
-    # 查找轮廓
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 策略：先按水平和垂直中线分割成4个象限
+    # 这样可以避免不同象限的卡片被连接在一起
+    mid_x = w // 2
+    mid_y = h // 2
     
-    if not contours:
-        return []
+    print(f"    图像尺寸: {w} x {h}, 中心点: ({mid_x}, {mid_y})")
+    print(f"    按2x2布局分割为4个象限...")
     
-    h, w = image_bgra.shape[:2]
-    min_area = h * w * min_area_ratio
+    # 定义4个象限：左上、右上、左下、右下
+    quadrants = [
+        (0, 0, mid_x, mid_y, "左上"),           # 左上
+        (mid_x, 0, w - mid_x, mid_y, "右上"),  # 右上
+        (0, mid_y, mid_x, h - mid_y, "左下"),  # 左下
+        (mid_x, mid_y, w - mid_x, h - mid_y, "右下"),  # 右下
+    ]
     
-    # 筛选轮廓：面积足够大，且是合理的矩形
-    valid_cards = []
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area < min_area:
+    all_cards = []
+    
+    # 在每个象限中检测卡片
+    for quad_x, quad_y, quad_w, quad_h, quad_name in quadrants:
+        print(f"    处理{quad_name}象限: ({quad_x}, {quad_y}) 尺寸: {quad_w} x {quad_h}")
+        
+        # 提取象限区域
+        quad_mask = mask[quad_y:quad_y+quad_h, quad_x:quad_x+quad_w]
+        quad_alpha = alpha[quad_y:quad_y+quad_h, quad_x:quad_x+quad_w]
+        
+        # 如果象限中没有内容，跳过
+        if np.sum(quad_mask > 0) < min_area * 0.3:
+            print(f"      {quad_name}象限内容太少，跳过")
             continue
         
-        # 计算边界框
-        x, y, card_w, card_h = cv2.boundingRect(contour)
+        # 在象限内查找轮廓
+        quad_contours, _ = cv2.findContours(quad_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # 检查宽高比（卡片通常是矩形）
-        aspect_ratio = max(card_w, card_h) / min(card_w, card_h)
-        if aspect_ratio > 3.0:  # 太细长，可能是误检
+        if not quad_contours:
             continue
         
-        valid_cards.append((contour, area))
+        # 筛选象限内的有效轮廓
+        quad_min_area = (quad_w * quad_h) * min_area_ratio
+        for contour in quad_contours:
+            area = cv2.contourArea(contour)
+            if area < quad_min_area:
+                continue
+            
+            # 计算边界框（相对于象限）
+            x_local, y_local, card_w, card_h = cv2.boundingRect(contour)
+            
+            # 检查宽高比（卡片通常是矩形）
+            aspect_ratio = max(card_w, card_h) / min(card_w, card_h) if min(card_w, card_h) > 0 else 0
+            if aspect_ratio > 3.0:  # 太细长，可能是误检
+                continue
+            
+            # 转换为全局坐标
+            x_global = quad_x + x_local
+            y_global = quad_y + y_local
+            
+            # 创建全局轮廓
+            contour_global = contour.copy()
+            contour_global[:, 0, 0] += quad_x
+            contour_global[:, 0, 1] += quad_y
+            
+            all_cards.append((contour_global, area, quad_name))
+            print(f"      {quad_name}象限: 找到卡片，面积 {area:.0f} 像素 ({area/total_area*100:.2f}%)")
     
-    # 按面积排序（从大到小）
-    valid_cards.sort(key=lambda x: x[1], reverse=True)
+    # 如果象限分割成功，使用象限结果
+    if all_cards:
+        print(f"    象限分割成功，找到 {len(all_cards)} 张卡片")
+        # 按面积排序（从大到小）
+        all_cards.sort(key=lambda x: x[1], reverse=True)
+        valid_cards = [(contour, area) for contour, area, _ in all_cards]
+    else:
+        print(f"    象限分割未找到卡片，回退到全局检测...")
+        # 回退到全局检测（简化版本）
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return []
+        
+        # 筛选轮廓
+        valid_cards = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:
+                continue
+            
+            x, y, card_w, card_h = cv2.boundingRect(contour)
+            aspect_ratio = max(card_w, card_h) / min(card_w, card_h) if min(card_w, card_h) > 0 else 0
+            if aspect_ratio > 3.0:
+                continue
+            
+            valid_cards.append((contour, area))
+        
+        valid_cards.sort(key=lambda x: x[1], reverse=True)
+    
+    # 如果象限分割成功，使用象限结果
+    if all_cards:
+        print(f"    象限分割成功，找到 {len(all_cards)} 张卡片")
+        # 按面积排序（从大到小）
+        all_cards.sort(key=lambda x: x[1], reverse=True)
+        valid_cards = [(contour, area) for contour, area, _ in all_cards]
+    else:
+        print(f"    象限分割未找到卡片，回退到全局检测...")
+        # 回退到全局检测（使用旧的逻辑）
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            return []
+        
+        # 筛选轮廓
+        valid_cards = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area:
+                continue
+            
+            x, y, card_w, card_h = cv2.boundingRect(contour)
+            aspect_ratio = max(card_w, card_h) / min(card_w, card_h) if min(card_w, card_h) > 0 else 0
+            if aspect_ratio > 3.0:
+                continue
+            
+            valid_cards.append((contour, area))
+        
+        valid_cards.sort(key=lambda x: x[1], reverse=True)
     
     # 提取每张卡片
     cards = []
