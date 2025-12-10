@@ -1,0 +1,13 @@
+opencv-python>=4.8.0
+numpy>=1.24.0
+streamlit>=1.28.0
+pyinstaller>=5.13.0
+easyocr>=1.7.0
+rembg>=2.0.0
+# onnxruntime-gpu需要CUDA 12.x，如果缺少CUDA库会自动回退到CPU
+# 如果遇到CUDA依赖问题，可以安装onnxruntime（CPU版本）作为后备
+onnxruntime-gpu>=1.23.0; sys_platform != 'darwin'
+onnxruntime>=1.23.0; sys_platform == 'darwin'
+torch>=2.0.0
+torchvision>=0.15.0
+
